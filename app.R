@@ -1,393 +1,512 @@
 ##############################################################
-# app.R — "La Boleta del Estado"
-# Dashboard del gasto público por departamento (MEF - Perú)
+# app.R — Dashboard de Seguimiento de Gasto Público (MEF - Perú)
 ##############################################################
-# Versión simplificada: KPIs arriba, mapa a la izquierda y
-# "Top 15 categorías de gasto" a la derecha. Sin pestañas
-# adicionales (serie histórica, tabla, etc. fueron removidas).
-#
-# Estructura esperada de datos (data/gasto_publico.rds):
-#   DEPARTAMENTO | <categorías de gasto...> | TOTAL | ANIO | TRIMESTRE
-# generado con scrape_gasto_publico() (ver scrape_gasto_publico.R)
-#
-# Estructura esperada del geojson (data/peru_departamentos.geojson):
-#   feature$properties$NOMBDEP  -> nombre de departamento (sin tilde, mayúsculas)
-##############################################################
-#setwd("C:\\Users\\Usuario\\Documents\\app_gasto_publico\\app_gasto_publico")
-source("global.R")
 
-  ##############################################################
-# 1. CARGA DE DATOS (una sola vez al iniciar la app)
+source("global.R")
+library(shinycssloaders) # Para spinners de carga elegantes
+
+##############################################################
+# 1. CARGA Y PREPARACIÓN DE DATOS
 ##############################################################
 
 ruta_datos <- "data/gasto_publico.rds"
-ruta_geo   <- "data/peru_departamentos.geojson"
 
 if (!file.exists(ruta_datos)) {
-  stop(
-    "No se encontró 'data/gasto_publico.rds'. ",
-    "Corre primero scrape_gasto_publico() y guarda el resultado con ",
-    "saveRDS(datos, 'data/gasto_publico.rds')."
-  )
+  stop("No se encontró 'data/gasto_publico.rds'. Asegúrate de generar el RDS.")
 }
 
-gasto <- readRDS(ruta_datos)
-gasto$DEPARTAMENTO <- normalizar_departamento(gasto$DEPARTAMENTO)
+gasto_raw <- readRDS(ruta_datos)
 
-# Columnas de categoría de gasto (todo lo que no sea metadata)
-cols_meta <- c("DEPARTAMENTO", "TOTAL", "ANIO", "TRIMESTRE")
-categorias_gasto <- setdiff(names(gasto), cols_meta)
+# Limpieza básica de nombres de departamento
+gasto_raw$DEPARTAMENTO <- toupper(trimws(gasto_raw$DEPARTAMENTO))
 
-anios_disponibles <- sort(unique(gasto$ANIO))
-trimestres_disponibles <- sort(unique(gasto$TRIMESTRE))
+# Identificación de columnas meta y categorías de gasto
+COLS_META  <- c("DEPARTAMENTO", "ANIO", "TRIMESTRE", "TOTAL")
+CATS_GASTO <- setdiff(names(gasto_raw), COLS_META) # Las 25 funciones/categorías
 
-# --- Geometría de departamentos (simplificada para que cargue rápido) ---
-mapa_peru <- st_read(ruta_geo, quiet = TRUE)
-
-# --- Geometría de departamentos ---
-mapa_peru <- st_read(ruta_geo, quiet = TRUE)
-mapa_peru$NOMBDEP <- normalizar_departamento(mapa_peru$NOMBDEP)
+ANIOS_DISP <- sort(unique(gasto_raw$ANIO))
+TRIMS_DISP <- sort(unique(gasto_raw$TRIMESTRE))
 
 ##############################################################
-# 2. UI
-##############################################################
-# Una sola hoja: KPIs arriba (fila angosta), mapa dominante a la
-# izquierda y "Top 15 categorías de gasto" a la derecha.
+# 2. UI (INTERFAZ DE USUARIO)
 ##############################################################
 
-panel_controles <- sidebar(
-  width = 280,
-  class = "panel-control",
-  bg = "transparent",
-  open = "always",
-  
-  selectInput(
-    "anio", "Año",
-    choices = anios_disponibles,
-    selected = max(anios_disponibles)
-  ),
-  
-  selectInput(
-    "trimestre", "Trimestre",
-    choices = trimestres_disponibles,
-    selected = max(trimestres_disponibles)
-  ),
-  
-  selectInput(
-    "categoria", "Categoría de gasto",
-    choices = c("TOTAL (todas las categorías)" = "TOTAL", categorias_gasto),
-    selected = "TOTAL"
-  ),
-  
-  hr(style = "border-color:#DDD5C7;"),
-  
-  radioButtons(
-    "vista_mapa", "Mostrar en el mapa",
-    choices = c("Monto ejecutado" = "monto",
-                "Variación vs. periodo anterior" = "variacion"),
-    selected = "monto"
-  ),
-  
-  hr(style = "border-color:#DDD5C7;"),
-  
-  div(
-    class = "pie-fuente",
-    "Los montos están expresados en soles (PEN), a valores corrientes ",
-    "del periodo reportado por el MEF."
-  )
-)
-
-ui <- page_fillable(
-  theme = tema_boleta,
-  title = "La Boleta del Estado · Gasto Público Perú",
-  padding = c(14, 18, 10, 18),
-  fillable_mobile = TRUE,
-  
-  div(
-    class = "membrete",
-    div(class = "membrete-eyebrow", "TRANSPARENCIA ECONÓMICA · MEF"),
-    div(
-      class = "membrete-sub",
-      "Gasto público ejecutado por departamento, función y periodo. ",
-      "Fuente: Portal de Transparencia Económica, Ministerio de Economía y Finanzas del Perú."
+ui <- fluidPage(
+  theme = tema_dashboard,
+  tags$head(
+    tags$link(rel = "stylesheet", href = "estilos.css"),
+    tags$link(rel = "preconnect", href = "https://fonts.googleapis.com"),
+    tags$link(
+      rel  = "stylesheet",
+      href = "https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap"
     )
   ),
   
-  layout_sidebar(
-    sidebar = panel_controles,
-    fillable = TRUE,
-    
-    # --- Fila de KPIs (angosta, fija) ---
-    layout_columns(
-      col_widths = c(3, 3, 3, 3),
-      height = "118px",
-      uiOutput("kpi_total"),
-      uiOutput("kpi_departamento_top"),
-      uiOutput("kpi_departamento_bottom"),
-      uiOutput("kpi_promedio")
-    ),
-    
-    # --- Mapa dominante + Top 15 categorías al costado ---
-    layout_columns(
-      col_widths = c(8, 4),
-      height = "calc(100% - 130px)",
+  div(class = "pagina-completa",
       
-      card(
-        full_screen = TRUE,
-        card_header("Distribución territorial del gasto"),
-        leafletOutput("mapa", height = "100%")
+      # ── BARRA SUPERIOR / FILTROS ──────────────────────────────
+      div(class = "barra-filtros",
+          
+          div(class = "filtro-grupo",
+              tags$label("Año"),
+              selectInput("anio", NULL, choices = ANIOS_DISP, selected = max(ANIOS_DISP), width = "110px")
+          ),
+          
+          div(class = "filtro-grupo",
+              tags$label("Trimestre"),
+              selectInput("trimestre", NULL, choices = TRIMS_DISP, selected = max(TRIMS_DISP), width = "90px")
+          ),
+          
+          div(class = "filtro-grupo",
+              tags$label("Categoría / Función"),
+              selectInput(
+                "categoria", NULL, 
+                choices = c("Todas las categorías (TOTAL)" = "TOTAL", sort(CATS_GASTO)), 
+                selected = "TOTAL", 
+                width = "250px"
+              )
+          ),
+          
+          div(class = "filtro-grupo",
+              tags$label("Ordenar por"),
+              selectInput("orden_ranking", NULL, choices = c("Mayor gasto" = "desc", "Menor gasto" = "asc"), selected = "desc", width = "140px")
+          ),
+          
+          div(class = "filtro-grupo", style = "margin-top: auto; margin-bottom: 5px;",
+              downloadButton("descargar_reporte", " Exportar Data", class = "btn btn-sm btn-outline-light")
+          ),
+          
+          div(class = "titulo-dashboard",
+              tags$h5("Seguimiento de Gasto Público"),
+              tags$span("MEF · Transparencia Económica · Perú")
+          )
       ),
       
-      card(
-        full_screen = TRUE,
-        card_header("Top 15 categorías de gasto"),
-        plotOutput("composicion", height = "100%")
+      # ── KPIs ─────────────────────────────────────────────────
+      fluidRow(
+        style = "margin-bottom: 20px;",
+        column(3, uiOutput("kpi_total", style = "width: 100%; display: block;")),
+        column(3, uiOutput("kpi_variacion", style = "width: 100%; display: block;")),
+        column(3, uiOutput("kpi_top_dept", style = "width: 100%; display: block;")),
+        column(3, uiOutput("kpi_rezago", style = "width: 100%; display: block;"))
+      ),
+      
+      # ── CUERPO PRINCIPAL ──────────────────────────────────────
+      div(class = "cuerpo-principal",
+          
+          div(class = "panel-dash",
+              div(class = "panel-header",
+                  tags$p(class = "panel-titulo", "Gasto ejecutado por departamento"),
+                  tags$span(class = "panel-subtitulo", "Soles corrientes · periodo seleccionado")
+              ),
+              div(class = "panel-body",
+                  withSpinner(plotlyOutput("ranking", height = "100%"), color = "#4A9E2B", type = 4)
+              )
+          ),
+          
+          div(class = "panel-dash",
+              div(class = "panel-header",
+                  tags$p(class = "panel-titulo", "Semáforo de ejecución"),
+                  tags$span(class = "panel-subtitulo", "vs. promedio nacional del periodo")
+              ),
+              div(class = "panel-body",
+                  div(class = "tabla-semaforo",
+                      tableOutput("semaforo")
+                  )
+              )
+          )
+      ),
+      
+      # ── FILA INFERIOR ─────────────────────────────────────────
+      div(class = "fila-inferior",
+          
+          div(class = "panel-dash",
+              div(class = "panel-header",
+                  tags$p(class = "panel-titulo", "Evolución histórica"),
+                  tags$span(class = "panel-subtitulo", "Gasto nacional agregado por trimestre")
+              ),
+              div(class = "panel-body",
+                  withSpinner(plotlyOutput("serie", height = "100%"), color = "#4A9E2B", type = 4)
+              )
+          ),
+          
+          div(class = "panel-dash",
+              div(class = "panel-header",
+                  tags$p(class = "panel-titulo", "Composición del gasto (Funciones)"),
+                  tags$span(class = "panel-subtitulo", "Top 10 categorías · periodo seleccionado")
+              ),
+              div(class = "panel-body",
+                  withSpinner(plotlyOutput("categorias", height = "100%"), color = "#4A9E2B", type = 4)
+              )
+          )
       )
-    )
   )
 )
 
 ##############################################################
-# 3. SERVER
+# SERVER CON VARIACIÓN ANUAL Y ESTADOS REVISADOS
 ##############################################################
 
 server <- function(input, output, session) {
   
-  ##########################################################
-  # 3.1 Datos reactivos base
-  ##########################################################
-  
-  # Periodo seleccionado actualmente
-  datos_periodo <- reactive({
-    gasto %>%
-      filter(ANIO == as.numeric(input$anio), TRIMESTRE == input$trimestre)
+  # ── Reactivos de Selección de Periodo ─────────────────────
+  periodo_actual <- reactive({
+    res <- gasto_raw %>%
+      filter(ANIO == as.numeric(input$anio),
+             TRIMESTRE == input$trimestre)
+    validate(need(nrow(res) > 0, "No se encontraron datos para el periodo seleccionado."))
+    res
   })
   
-  # Periodo inmediatamente anterior disponible en los datos (para variación)
-  periodo_anterior <- reactive({
-    secuencia <- gasto %>%
-      distinct(ANIO, TRIMESTRE) %>%
-      mutate(orden = ANIO * 10 + as.numeric(gsub("Q", "", TRIMESTRE))) %>%
-      arrange(orden)
+  # Variación Homogénea: Mismo trimestre del año anterior (YoY)
+  periodo_anio_anterior <- reactive({
+    anio_previo <- as.numeric(input$anio) - 1
+    trim_actual <- input$trimestre
     
-    actual_orden <- as.numeric(input$anio) * 10 + as.numeric(gsub("Q", "", input$trimestre))
-    candidatos <- secuencia %>% filter(orden < actual_orden)
+    res <- gasto_raw %>%
+      filter(ANIO == anio_previo, TRIMESTRE == trim_actual)
     
-    if (nrow(candidatos) == 0) return(NULL)
-    
-    fila <- candidatos %>% filter(orden == max(orden))
-    
-    gasto %>% filter(ANIO == fila$ANIO[1], TRIMESTRE == fila$TRIMESTRE[1])
+    if (nrow(res) == 0) return(NULL)
+    res
   })
   
-  # Columna de monto según categoría elegida, ya resuelta a un solo valor
-  # numérico por departamento para el periodo seleccionado
-  monto_por_departamento <- reactive({
+  col_activa <- reactive({
     req(input$categoria)
-    df <- datos_periodo()
-    col <- input$categoria
-    df %>%
-      transmute(DEPARTAMENTO, MONTO = .data[[col]])
+    input$categoria
   })
   
-  monto_por_departamento_anterior <- reactive({
-    req(input$categoria)
-    df <- periodo_anterior()
+  # ── Limpieza de Datos: Filtro Excluyendo 'TOTAL' ───────────
+  montos_actual <- reactive({
+    req(col_activa())
+    periodo_actual() %>%
+      transmute(DEPARTAMENTO, MONTO = .data[[col_activa()]]) %>%
+      filter(!is.na(MONTO), MONTO >= 0, !toupper(DEPARTAMENTO) %in% c("TOTAL", "TOTAL GENERAL", "NACIONAL"))
+  })
+  
+  montos_anio_anterior <- reactive({
+    df <- periodo_anio_anterior()
     if (is.null(df)) return(NULL)
-    col <- input$categoria
+    req(col_activa())
     df %>%
-      transmute(DEPARTAMENTO, MONTO = .data[[col]])
+      transmute(DEPARTAMENTO, MONTO = .data[[col_activa()]]) %>%
+      filter(!is.na(MONTO), MONTO >= 0, !toupper(DEPARTAMENTO) %in% c("TOTAL", "TOTAL GENERAL", "NACIONAL"))
   })
   
-  # Variación porcentual vs. periodo anterior, por departamento
-  variacion_por_departamento <- reactive({
-    actual <- monto_por_departamento()
-    anterior <- monto_por_departamento_anterior()
+  # ── Cálculo Centralizado de Métricas / Umbrales ───────────
+  metricas_periodo <- reactive({
+    df <- montos_actual()
+    req(nrow(df) > 0)
     
-    if (is.null(anterior)) {
-      return(actual %>% mutate(VARIACION = NA_real_))
+    promedio     <- mean(df$MONTO, na.rm = TRUE)
+    mediana      <- median(df$MONTO, na.rm = TRUE)
+    umbral_low   <- promedio * 0.50 # Umbral bajo (<50% del promedio regional)
+    umbral_high  <- promedio * 1.25 # Umbral alto (>125% del promedio regional)
+    
+    list(
+      df          = df,
+      promedio    = promedio,
+      mediana     = mediana,
+      umbral_low  = umbral_low,
+      umbral_high = umbral_high
+    )
+  })
+  
+  # ── Exportación de Reporte ────────────────────────────────
+  output$descargar_reporte <- downloadHandler(
+    filename = function() {
+      paste0("gasto_publico_", input$anio, "_", input$trimestre, ".csv")
+    },
+    content = function(file) {
+      write.csv(periodo_actual(), file, row.names = FALSE)
     }
-    
-    actual %>%
-      left_join(anterior, by = "DEPARTAMENTO", suffix = c("", "_ANT")) %>%
-      mutate(
-        VARIACION = ifelse(
-          is.na(MONTO_ANT) | MONTO_ANT == 0,
-          NA_real_,
-          (MONTO - MONTO_ANT) / MONTO_ANT * 100
-        )
-      ) %>%
-      select(DEPARTAMENTO, MONTO, VARIACION)
-  })
+  )
   
-  ##########################################################
-  # 3.2 KPIs (tarjetas tipo "línea de boleta")
-  ##########################################################
-  
-  kpi_card <- function(label, value, delta_html = NULL) {
+  # ── Helper UI para KPIs ───────────────────────────────────
+  # ── Helper UI para KPIs (Optimizado para Web / ShinyApps) ─────────
+  kpi_ui <- function(etiqueta, numero, sub = NULL, sub_clase = NULL, acento = PAL$azul_claro) {
     div(
       class = "kpi-card",
-      div(class = "kpi-label", label),
-      div(class = "kpi-value", value),
-      if (!is.null(delta_html)) delta_html
+      style = paste0(
+        "border-left: 4px solid ", acento, "; ",
+        "background-color: #1A1D24; ",
+        "border-radius: 6px; ",
+        "padding: 16px; ",
+        "min-height: 110px; ",
+        "display: flex; ",
+        "flex-direction: column; ",
+        "justify-content: space-between; ",
+        "box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2); ",
+        "margin-bottom: 12px;" # Espaciado si la pantalla se vuelve pequeña
+      ),
+      div(
+        style = "font-size: 0.78rem; color: #9DA8B6; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;",
+        etiqueta
+      ),
+      div(
+        style = ifelse(nchar(numero) > 8, 
+                       "font-size: 1.3rem; font-weight: 700; color: #FFFFFF; margin: 6px 0;", 
+                       "font-size: 1.6rem; font-weight: 700; color: #FFFFFF; margin: 6px 0;"),
+        numero
+      ),
+      if (!is.null(sub)) {
+        col_sub <- case_when(
+          sub_clase == "verde" ~ PAL$verde,
+          sub_clase == "rojo"  ~ PAL$rojo,
+          sub_clase == "ambar" ~ PAL$ambar,
+          TRUE                ~ PAL$texto_suave
+        )
+        div(
+          style = paste0("font-size: 0.8rem; font-weight: 500; color: ", col_sub, ";"),
+          sub
+        )
+      }
     )
   }
   
+  # ── KPIs ──────────────────────────────────────────────────
   output$kpi_total <- renderUI({
-    total <- sum(monto_por_departamento()$MONTO, na.rm = TRUE)
-    kpi_card(
-      paste0("GASTO TOTAL · ", input$anio, " ", input$trimestre),
-      fmt_soles_compacto(total)
-    )
+    total <- sum(montos_actual()$MONTO, na.rm = TRUE)
+    label <- if(input$categoria == "TOTAL") "Gasto Total Ejecutado" else paste("Gasto en", input$categoria)
+    kpi_ui(label, fmt_millon(total),
+           sub = paste(input$anio, input$trimestre), acento = PAL$azul_claro)
   })
   
-  output$kpi_departamento_top <- renderUI({
-    df <- monto_por_departamento() %>% arrange(desc(MONTO)) %>% slice(1)
-    kpi_card(
-      "MAYOR EJECUCIÓN",
-      df$DEPARTAMENTO,
-      div(class = "kpi-delta", fmt_soles_compacto(df$MONTO))
-    )
-  })
-  
-  output$kpi_departamento_bottom <- renderUI({
-    df <- monto_por_departamento() %>%
-      filter(MONTO > 0) %>%
-      arrange(MONTO) %>%
-      slice(1)
-    kpi_card(
-      "MENOR EJECUCIÓN",
-      df$DEPARTAMENTO,
-      div(class = "kpi-delta", fmt_soles_compacto(df$MONTO))
-    )
-  })
-  
-  output$kpi_promedio <- renderUI({
-    var_df <- variacion_por_departamento()
-    var_prom <- mean(var_df$VARIACION, na.rm = TRUE)
-    promedio_monto <- mean(monto_por_departamento()$MONTO, na.rm = TRUE)
+  # KPI Modificado: Comparación vs. Mismo Trimestre del Año Anterior
+  output$kpi_variacion <- renderUI({
+    total_act <- sum(montos_actual()$MONTO, na.rm = TRUE)
+    df_ant    <- montos_anio_anterior()
     
-    if (is.nan(var_prom) || is.na(var_prom)) {
-      valor_principal <- "—"
-      delta <- div(class = "kpi-delta", "Sin periodo previo para comparar")
-    } else {
-      clase <- if (var_prom >= 0) "up" else "down"
-      signo <- if (var_prom >= 0) "+" else ""
-      valor_principal <- paste0(signo, round(var_prom, 1), "%")
-      delta <- div(
-        class = paste("kpi-delta", clase),
-        paste("Promedio departamental:", fmt_soles_compacto(promedio_monto))
-      )
+    if (is.null(df_ant)) {
+      return(kpi_ui("Variación vs. año anterior", "—", 
+                    sub = paste("Sin datos para", input$trimestre, as.numeric(input$anio) - 1), 
+                    acento = PAL$texto_suave))
     }
     
-    kpi_card(
-      "VARIACIÓN PROMEDIO",
-      valor_principal,
-      delta
-    )
+    total_ant <- sum(df_ant$MONTO, na.rm = TRUE)
+    var_pct   <- if(total_ant > 0) (total_act - total_ant) / total_ant * 100 else 0
+    signo     <- if (var_pct >= 0) "+" else ""
+    color     <- if (var_pct >= 0) PAL$verde else PAL$rojo
+    clase     <- if (var_pct >= 0) "verde" else "rojo"
+    
+    kpi_ui("Variación vs. año anterior",
+           paste0(signo, round(var_pct, 1), "%"),
+           sub       = paste0(input$trimestre, " ", as.numeric(input$anio) - 1, ": ", fmt_millon(total_ant)),
+           sub_clase = clase, acento = color)
   })
   
-  ##########################################################
-  # 3.3 Mapa (leaflet)
-  ##########################################################
+  output$kpi_top_dept <- renderUI({
+    df <- montos_actual() %>% arrange(desc(MONTO)) %>% slice(1)
+    validate(need(nrow(df) > 0, ""))
+    kpi_ui("Región con mayor gasto", df$DEPARTAMENTO, sub = fmt_millon(df$MONTO), acento = PAL$verde)
+  })
   
-  output$mapa <- renderLeaflet({
+  # KPI Modificado: Regiones en Nivel Bajo (<50% del promedio)
+  output$kpi_rezago <- renderUI({
+    m         <- metricas_periodo()
+    cant_bajo <- m$df %>% filter(MONTO < m$umbral_low) %>% nrow()
     
-    if (input$vista_mapa == "monto") {
-      datos_mapa <- monto_por_departamento()
-      etiqueta_valor <- fmt_soles_compacto
-      titulo_leyenda <- "Monto ejecutado"
-    } else {
-      datos_mapa <- variacion_por_departamento() %>% select(DEPARTAMENTO, MONTO = VARIACION)
-      etiqueta_valor <- function(x) paste0(round(x, 1), "%")
-      titulo_leyenda <- "Variación vs. periodo anterior"
-    }
+    clase <- if (cant_bajo == 0) "verde" else if (cant_bajo <= 3) "ambar" else "rojo"
+    color <- if (cant_bajo == 0) PAL$verde else if (cant_bajo <= 3) PAL$ambar else PAL$rojo
     
-    geo <- mapa_peru %>%
-      left_join(datos_mapa, by = c("NOMBDEP" = "DEPARTAMENTO"))
+    kpi_ui("Regiones con nivel bajo", as.character(cant_bajo),
+           sub = paste0("Gasto inferior a ", fmt_millon(m$umbral_low), " (<50% prom)"), 
+           sub_clase = clase, acento = color)
+  })
+  
+  # ── GRÁFICO 1: Ranking Departamental con Zonas de Ejecución ─
+  output$ranking <- renderPlotly({
+    m  <- metricas_periodo()
+    df <- m$df %>% arrange(if (input$orden_ranking == "desc") MONTO else desc(MONTO))
     
-    paleta <- colorNumeric(
-      palette = if (input$vista_mapa == "monto") {
-        PALETA_MAPA(100)
-      } else {
-        colorRampPalette(c(PAL$cobre, "#F3E9DD", PAL$oliva))(100)
-      },
-      domain = geo$MONTO,
-      na.color = "#E5E0D6"
-    )
-    
-    etiquetas <- sprintf(
-      "<div class='popup-boleta'><div class='popup-depto'>%s</div><div class='popup-monto'>%s</div></div>",
-      geo$NOMBDEP,
-      sapply(geo$MONTO, function(v) if (is.na(v)) "Sin datos" else etiqueta_valor(v))
-    ) %>% lapply(htmltools::HTML)
-    
-    leaflet(geo, options = leafletOptions(zoomControl = TRUE, attributionControl = FALSE)) %>%
-      addProviderTiles("CartoDB.PositronNoLabels") %>%
-      setView(lng = -75.5, lat = -9.2, zoom = 5) %>%
-      addPolygons(
-        fillColor = ~paleta(MONTO),
-        fillOpacity = 0.85,
-        color = PAL$tinta,
-        weight = 0.6,
-        opacity = 0.6,
-        highlightOptions = highlightOptions(
-          weight = 2, color = PAL$cobre, fillOpacity = 0.95, bringToFront = TRUE
+    df <- df %>%
+      mutate(
+        COLOR = case_when(
+          MONTO < m$umbral_low   ~ PAL$rojo,
+          MONTO >= m$umbral_high ~ PAL$verde,
+          TRUE                   ~ PAL$azul_claro
         ),
-        label = etiquetas,
-        labelOptions = labelOptions(
-          style = list("font-family" = "Inter"),
-          textsize = "12px"
+        TEXTO  = fmt_millon_gg(MONTO),
+        DEPT_F = factor(DEPARTAMENTO, levels = DEPARTAMENTO)
+      )
+    
+    p <- plot_ly(df,
+                 x           = ~MONTO,
+                 y           = ~DEPT_F,
+                 type        = "bar",
+                 orientation = "h",
+                 showlegend  = FALSE,
+                 name        = "Gasto Regional",
+                 marker      = list(color = ~COLOR, line = list(width = 0)),
+                 text        = ~TEXTO,
+                 textposition = "outside",
+                 textfont    = list(color = "#E8EDF2", size = 10),
+                 hovertemplate = paste0("<b>%{y}</b><br>Gasto: %{text}<br><extra></extra>")
+    ) %>%
+      # Línea Vertical: Promedio Nacional
+      add_segments(
+        x = m$promedio, xend = m$promedio,
+        y = 0, yend = nrow(df) + 1,
+        line = list(color = PAL$ambar, width = 1.5, dash = "dash"),
+        name = "Promedio Nacional", inherit = FALSE
+      ) %>%
+      # Línea Vertical: Umbral Bajo (50%)
+      add_segments(
+        x = m$umbral_low, xend = m$umbral_low,
+        y = 0, yend = nrow(df) + 1,
+        line = list(color = PAL$rojo, width = 1.5, dash = "dot"),
+        name = "Umbral Bajo (50%)", inherit = FALSE
+      ) %>%
+      layout(
+        paper_bgcolor = PAL$panel, plot_bgcolor = PAL$panel,
+        margin = list(l = 5, r = 60, t = 10, b = 10),
+        xaxis = list(color = PAL$texto_suave, gridcolor = PAL$borde, tickfont = list(size = 9), showgrid = TRUE),
+        yaxis = list(color = PAL$texto, tickfont = list(size = 9), showgrid = FALSE, automargin = TRUE),
+        showlegend = TRUE,
+        legend = list(x = 0.55, y = 0.05, font = list(color = PAL$texto_suave, size = 9), bgcolor = "rgba(0,0,0,0.5)"),
+        bargap = 0.3,
+        shapes = list(
+          list(
+            type = "rect",
+            x0 = 0, x1 = m$umbral_low,
+            y0 = 0, y1 = nrow(df) + 1,
+            fillcolor = PAL$rojo, opacity = 0.08,
+            line = list(width = 0)
+          )
         )
       ) %>%
-      addLegend(
-        position = "bottomright",
-        pal = paleta,
-        values = ~MONTO,
-        title = titulo_leyenda,
-        labFormat = labelFormat(suffix = if (input$vista_mapa == "variacion") "%" else "")
-      )
+      config(displayModeBar = FALSE)
+    
+    p
   })
   
-  ##########################################################
-  # 3.4 Top 15 categorías de gasto (barras horizontales)
-  ##########################################################
+  # ── TABLA: Semáforo de Ejecución Regional ───────────────
+  output$semaforo <- renderTable({
+    m       <- metricas_periodo()
+    df      <- m$df
+    df_ant  <- montos_anio_anterior()
+    
+    # Nuevas Categorías: ALTO / MEDIO / BAJO
+    df <- df %>%
+      arrange(desc(MONTO)) %>%
+      mutate(
+        Estado = case_when(
+          MONTO < m$umbral_low   ~ paste0("<span style='color:", PAL$rojo, ";'>● BAJO</span>"),
+          MONTO >= m$umbral_high ~ paste0("<span style='color:", PAL$verde, ";'>● ALTO</span>"),
+          TRUE                   ~ paste0("<span style='color:", PAL$azul_claro, ";'>● MEDIO</span>")
+        )
+      )
+    
+    if (!is.null(df_ant)) {
+      df <- df %>%
+        left_join(df_ant %>% rename(MONTO_ANT = MONTO), by = "DEPARTAMENTO") %>%
+        mutate(
+          VAR_PCT = round((MONTO - MONTO_ANT) / MONTO_ANT * 100, 1),
+          `Var. % (YoY)` = ifelse(is.na(VAR_PCT), "—", paste0(ifelse(VAR_PCT >= 0, "+", ""), VAR_PCT, "%"))
+        )
+    } else {
+      df$`Var. % (YoY)` <- "—"
+    }
+    
+    df %>%
+      transmute(
+        Departamento  = DEPARTAMENTO,
+        `Gasto (S/M)` = round(MONTO / 1e6, 1),
+        `Var. % (YoY)`,
+        Estado
+      )
+  }, sanitize.text.function = identity, hover = TRUE, bordered = FALSE, width = "100%", na = "—")
   
-  output$composicion <- renderPlot({
-    df <- datos_periodo() %>%
-      select(DEPARTAMENTO, all_of(categorias_gasto)) %>%
+  # ── GRÁFICO 2: Evolución Histórica (Mismo Trimestre) ──────
+  output$serie <- renderPlotly({
+    req(col_activa(), input$trimestre)
+    col <- col_activa()
+    trim_sel <- input$trimestre
+    
+    serie <- gasto_raw %>%
+      filter(!toupper(DEPARTAMENTO) %in% c("TOTAL", "TOTAL GENERAL", "NACIONAL")) %>%
+      filter(TRIMESTRE == trim_sel) %>%
+      mutate(PERIODO_LAB = paste0(ANIO, " ", TRIMESTRE)) %>%
+      group_by(ANIO, TRIMESTRE, PERIODO_LAB) %>%
+      summarise(MONTO = sum(.data[[col]], na.rm = TRUE), .groups = "drop") %>%
+      arrange(ANIO)
+    
+    validate(need(nrow(serie) > 0, paste("Sin datos históricos para el", trim_sel)))
+    
+    anio_sel <- as.numeric(input$anio)
+    
+    plot_ly(serie) %>%
+      add_trace(
+        x = ~ANIO, y = ~MONTO, type = "scatter", mode = "lines+markers",
+        line = list(color = PAL$azul_claro, width = 2),
+        marker = list(color = PAL$azul_claro, size = 6, line = list(color = PAL$panel, width = 1.5)),
+        fill = "tozeroy", fillcolor = "rgba(74,158,219,0.08)",
+        hovertemplate = paste0("<b>%{customdata}</b><br>Gasto: S/ %{y:,.0f}<br><extra></extra>"),
+        customdata = ~PERIODO_LAB, name = paste("Histórico", trim_sel)
+      ) %>%
+      add_trace(
+        data = serie %>% filter(ANIO == anio_sel),
+        x = ~ANIO, y = ~MONTO, type = "scatter", mode = "markers",
+        marker = list(color = PAL$verde, size = 11, line = list(color = PAL$panel, width = 2)),
+        hovertemplate = paste0("<b>Año seleccionado (%{customdata})</b><br>Gasto: S/ %{y:,.0f}<br><extra></extra>"),
+        customdata = ~PERIODO_LAB, name = "Selección actual"
+      ) %>%
+      layout(
+        paper_bgcolor = PAL$panel, plot_bgcolor = PAL$panel,
+        margin = list(l = 5, r = 10, t = 10, b = 10),
+        xaxis = list(
+          title = "",
+          color = PAL$texto_suave, gridcolor = PAL$borde, tickfont = list(size = 9),
+          dtick = 1
+        ),
+        yaxis = list(color = PAL$texto_suave, gridcolor = PAL$borde, tickfont = list(size = 9), tickformat = ",.0f"),
+        showlegend = TRUE,
+        legend = list(x = 0.01, y = 0.99, font = list(color = PAL$texto_suave, size = 9), bgcolor = "rgba(0,0,0,0)")
+      ) %>%
+      config(displayModeBar = FALSE)
+  })
+  
+  # ── GRÁFICO 3: Composición del Gasto (Top 10 Categorías) ──
+  output$categorias <- renderPlotly({
+    df_periodo_limpio <- periodo_actual() %>%
+      filter(!toupper(DEPARTAMENTO) %in% c("TOTAL", "TOTAL GENERAL", "NACIONAL"))
+    
+    df <- df_periodo_limpio %>%
+      select(DEPARTAMENTO, all_of(CATS_GASTO)) %>%
       pivot_longer(-DEPARTAMENTO, names_to = "CATEGORIA", values_to = "MONTO") %>%
       group_by(CATEGORIA) %>%
       summarise(MONTO = sum(MONTO, na.rm = TRUE), .groups = "drop") %>%
       filter(MONTO > 0) %>%
-      arrange(desc(MONTO)) %>%
+      arrange(MONTO) %>%
+      slice_tail(n = 10) %>%
       mutate(
-        CATEGORIA = factor(CATEGORIA, levels = rev(CATEGORIA)),
-        PARTICIPACION = MONTO / sum(MONTO)
-      ) %>%
-      slice_head(n = 15)
-    
-    ggplot2::ggplot(df, ggplot2::aes(x = MONTO, y = CATEGORIA)) +
-      ggplot2::geom_col(fill = PAL$oliva, width = 0.7) +
-      ggplot2::geom_text(
-        ggplot2::aes(label = scales::percent(PARTICIPACION, accuracy = 0.1)),
-        hjust = -0.1, size = 5, family = "mono", color = PAL$tinta
-      ) +
-      ggplot2::scale_x_continuous(labels = fmt_soles_compacto, expand = c(0, 0, 0.18, 0)) +
-      ggplot2::labs(x = NULL, y = NULL) +
-      ggplot2::theme_minimal(base_family = "sans", base_size = 10) +
-      ggplot2::theme(
-        panel.grid.major.y = ggplot2::element_blank(),
-        panel.grid.minor    = ggplot2::element_blank(),
-        panel.grid.major.x  = ggplot2::element_line(color = PAL$linea, linewidth = 0.3),
-        plot.background  = ggplot2::element_rect(fill = "transparent", color = NA),
-        panel.background = ggplot2::element_rect(fill = "transparent", color = NA)
+        PARTICIPACION = MONTO / sum(df_periodo_limpio$TOTAL, na.rm = TRUE),
+        TEXTO = paste0(round(PARTICIPACION * 100, 1), "%"),
+        CAT_CORTA = stringr::str_trunc(CATEGORIA, 28, ellipsis = "…"),
+        CAT_F = factor(CAT_CORTA, levels = CAT_CORTA)
       )
-  }, bg = "transparent")
+    
+    validate(need(nrow(df) > 0, "Sin datos de categorías para mostrar."))
+    
+    plot_ly(df,
+            x = ~MONTO, y = ~CAT_F, type = "bar", orientation = "h",
+            marker = list(color = PAL$verde, opacity = 0.85),
+            text = ~TEXTO, textposition = "outside",
+            textfont = list(color = PAL$texto_suave, size = 10),
+            hovertemplate = paste0("<b>%{y}</b><br>Gasto: S/ %{x:,.0f}<br>Participación nacional: %{text}<br><extra></extra>")
+    ) %>%
+      layout(
+        paper_bgcolor = PAL$panel, plot_bgcolor = PAL$panel,
+        margin = list(l = 5, r = 55, t = 10, b = 10),
+        xaxis = list(color = PAL$texto_suave, gridcolor = PAL$borde, tickfont = list(size = 9), tickformat = ",.0f"),
+        yaxis = list(color = PAL$texto, tickfont = list(size = 9), automargin = TRUE),
+        bargap = 0.3, showlegend = FALSE
+      ) %>%
+      config(displayModeBar = FALSE)
+  })
 }
 
 ##############################################################
-# 4. RUN APP
+# 4. LANZAMIENTO
 ##############################################################
 
 shinyApp(ui = ui, server = server)
