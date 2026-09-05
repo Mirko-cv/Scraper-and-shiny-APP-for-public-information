@@ -3,7 +3,7 @@
 ##############################################################
 
 source("global.R")
-library(shinycssloaders) # Para spinners de carga elegantes
+library(shinycssloaders) # Para spinners
 
 ##############################################################
 # 1. CARGA Y PREPARACIÓN DE DATOS
@@ -144,7 +144,7 @@ ui <- fluidPage(
 )
 
 ##############################################################
-# SERVER CON VARIACIÓN ANUAL Y ESTADOS REVISADOS
+# SERVER CON VARIACIÓN ANUAL Y ESTADOS
 ##############################################################
 
 server <- function(input, output, session) {
