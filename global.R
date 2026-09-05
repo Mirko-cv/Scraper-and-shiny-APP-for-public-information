@@ -1,72 +1,95 @@
 ##############################################################
-# global.R — tema visual, paquetes y utilidades compartidas
-##############################################################
-# Dashboard: "La Boleta del Estado"
-# Concepto: el gasto público leído como un recibo nacional —
-# cada departamento, una línea de gasto; cada año, una boleta.
+# global.R — Dashboard de Seguimiento de Gasto Público
+# Dependencias: shiny, bslib, dplyr, tidyr, ggplot2,
+#               scales, DT, plotly — NINGUNA con sf/terra
 ##############################################################
 
-# --- Paquetes ---
 library(shiny)
 library(bslib)
-library(leaflet)
-library(sf)
 library(dplyr)
+library(tidyr)
+library(ggplot2)
 library(scales)
 library(DT)
-library(tidyr)
+library(plotly)
+library(apexcharter)
 
-# --- Paleta de la "Boleta del Estado" ---
-# Papel cálido + tinta cobre, como una boleta fiscal impresa
+# --- Paleta institucional noche ---
 PAL <- list(
-  papel       = "#FAF7F2",  # fondo
-  papel_panel = "#FFFFFF",
-  tinta       = "#1F1B16",  # texto principal
-  tinta_suave = "#5C5347",  # texto secundario
-  cobre       = "#B5482F",  # acento principal (gasto, alerta)
-  oliva       = "#3A4A30",  # acento secundario (territorio, mapa alto)
-  oliva_claro = "#7C8D6B",
-  linea       = "#DDD5C7",  # bordes / separadores
-  ambar       = "#C68A2E"   # acento terciario (resaltes puntuales)
+  fondo        = "#0F1923",
+  panel        = "#162030",
+  panel2       = "#1C2A3A",
+  borde        = "#253447",
+  texto        = "#E8EDF2",
+  texto_suave  = "#7A90A8",
+  verde        = "#00C896",   # ejecución alta / buena
+  ambar        = "#F4A942",   # ejecución media / alerta
+  rojo         = "#E05252",   # ejecución baja / crítica
+  azul_claro   = "#4A9EDB"    # acento neutral / serie histórica
 )
 
-# Escala secuencial para el mapa (papel -> cobre, como tinta absorbiéndose)
-PALETA_MAPA <- colorRampPalette(c("#F3E9DD", PAL$cobre, "#5C1C0F"))
-
-# --- Tema bslib (Bootstrap 5) ---
-# Nota: esta ruta es relativa a la raíz de la app (estándar en Shiny,
-# ya sea ejecutando runApp("app_gasto_publico") o abriendo el .Rproj).
-tema_boleta <- bs_theme(
-  version     = 5,
-  bg          = PAL$papel,
-  fg          = PAL$tinta,
-  primary     = PAL$cobre,
-  secondary   = PAL$oliva,
-  base_font     = font_google("Inter"),
-  heading_font  = font_google("Source Serif 4"),
-  code_font     = font_google("IBM Plex Mono"),
-  "font-size-base" = "0.95rem"
-) %>%
-  bs_add_rules(sass::sass_file("www/estilos.scss"))
-
-# --- Utilidades de formato ---
-fmt_soles <- function(x, escala = 1e6, sufijo = " mill.") {
-  paste0("S/ ", scales::comma(round(x / escala, 1), accuracy = 0.1), sufijo)
+# --- Semáforo: clasifica ejecución relativa al promedio ---
+# Verde: >= 90% del promedio | Ámbar: 70-90% | Rojo: < 70%
+semaforo_color <- function(monto, promedio) {
+  ratio <- ifelse(promedio == 0, 0, monto / promedio)
+  dplyr::case_when(
+    ratio >= 0.90 ~ PAL$verde,
+    ratio >= 0.70 ~ PAL$ambar,
+    TRUE          ~ PAL$rojo
+  )
 }
 
-fmt_soles_compacto <- function(x) {
-  scales::label_number(
-    scale_cut = scales::cut_short_scale(),
-    prefix = "S/ "
-  )(x)
+semaforo_label <- function(monto, promedio) {
+  ratio <- ifelse(promedio == 0, 0, monto / promedio)
+  dplyr::case_when(
+    ratio >= 0.90 ~ "En ritmo",
+    ratio >= 0.70 ~ "Rezago leve",
+    TRUE          ~ "Rezago crítico"
+  )
 }
 
-# Departamentos donde "LIMA" en datos MEF puede incluir o no Callao;
-# se deja como utilidad para que el usuario ajuste si su fuente separa
-# "LIMA METROPOLITANA" / "LIMA PROVINCIAS" en vez de "LIMA" + "CALLAO".
-normalizar_departamento <- function(x) {
-  x <- toupper(trimws(x))
-  x <- gsub("Á", "A", x); x <- gsub("É", "E", x); x <- gsub("Í", "I", x)
-  x <- gsub("Ó", "O", x); x <- gsub("Ú", "U", x); x <- gsub("Ñ", "N", x)
-  x
+# --- Formato de montos ---
+fmt_millon <- function(x) {
+  paste0("S/ ", scales::comma(round(x / 1e6, 1)), "M")
 }
+
+fmt_millon_gg <- function(x) {
+  dplyr::case_when(
+    abs(x) >= 1e9 ~ paste0("S/ ", round(x / 1e9, 1), "B"),
+    abs(x) >= 1e6 ~ paste0("S/ ", round(x / 1e6, 1), "M"),
+    TRUE          ~ paste0("S/ ", scales::comma(round(x / 1e3, 0)), "K")
+  )
+}
+
+# --- Tema ggplot2 oscuro coherente con el panel ---
+tema_oscuro <- function(base_size = 11) {
+  theme_minimal(base_size = base_size, base_family = "sans") +
+    theme(
+      plot.background    = element_rect(fill = PAL$panel, color = NA),
+      panel.background   = element_rect(fill = PAL$panel, color = NA),
+      panel.grid.major   = element_line(color = PAL$borde, linewidth = 0.3),
+      panel.grid.minor   = element_blank(),
+      panel.grid.major.y = element_blank(),
+      text               = element_text(color = PAL$texto),
+      axis.text          = element_text(color = PAL$texto_suave, size = 9),
+      axis.title         = element_blank(),
+      plot.title         = element_text(color = PAL$texto, size = 13,
+                                        face = "bold", margin = margin(b = 8)),
+      plot.subtitle      = element_text(color = PAL$texto_suave, size = 10,
+                                        margin = margin(b = 12)),
+      legend.background  = element_rect(fill = PAL$panel, color = NA),
+      legend.text        = element_text(color = PAL$texto_suave, size = 9),
+      legend.title       = element_text(color = PAL$texto, size = 9),
+      plot.margin        = margin(12, 16, 12, 16)
+    )
+}
+
+# --- Tema bslib mínimo (sin Google Fonts, evita problemas offline) ---
+tema_dashboard <- bs_theme(
+  version   = 5,
+  bg        = PAL$fondo,
+  fg        = PAL$texto,
+  primary   = PAL$verde,
+  secondary = PAL$azul_claro,
+  "font-size-base" = "0.9rem"
+)
