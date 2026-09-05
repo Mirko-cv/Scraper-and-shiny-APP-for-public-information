@@ -1,7 +1,7 @@
 ##############################################################
 # global.R — Dashboard de Seguimiento de Gasto Público
 # Dependencias: shiny, bslib, dplyr, tidyr, ggplot2,
-#               scales, DT, plotly — NINGUNA con sf/terra
+#               scales, DT, plotly
 ##############################################################
 
 library(shiny)
