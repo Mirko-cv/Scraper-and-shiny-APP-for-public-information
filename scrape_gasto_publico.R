@@ -146,5 +146,8 @@ scrape_gasto_publico <- function(anios,
 # 3) Descargar trimestres específicos de varios años
 # datos_mixto <- scrape_gasto_publico(anios = c(2022, 2023), trimestres = c(1,2,3, 4))
 
+#Prueba:
+#scrape_gasto_publico(anios = 2021:2026) -> data
+# data %>% filter(!(ANIO == 2026 & TRIMESTRE %in% c("Q3","Q4") )) -> data1
 
-saveRDS(datos_mixto,".\\data\\gasto_publico.rds")
+saveRDS(data1,".\\data\\gasto_publico.rds")
