@@ -121,7 +121,7 @@ scrape_gasto_publico <- function(anios,
     return(data.frame())
   }
 
-  datos_finales <- bind_rows(lista_resultados)
+  datos_finales <- bind_rows(lista_resultados)  %>% filter(DEPARTAMENTO !="TOTAL")
 
   if (verbose) {
     message(sprintf(
