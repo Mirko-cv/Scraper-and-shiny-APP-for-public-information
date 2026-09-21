@@ -104,5 +104,5 @@ shiny::runApp()
 
 Economista | Analista de Datos | Business Intelligence
 
-[GitHub](https://github.com/Mirko-cv)
-[Dashboard] (https://8ezlpo-mirko-caja0ventura.shinyapps.io/app_gasto_publico/)
+[GitHub](https://github.com/Mirko-cv)  
+[Dashboard](https://8ezlpo-mirko-caja0ventura.shinyapps.io/app_gasto_publico/)
