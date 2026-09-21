@@ -346,9 +346,16 @@ server <- function(input, output, session) {
     df <- periodo_anio_ant()
     if (nrow(df) == 0) return(NULL)
     req(col_activa())
-    df %>%
+    
+    resultado <- df %>%
       transmute(DEPARTAMENTO, MONTO_ANT = .data[[col_activa()]]) %>%
       filter(!is.na(MONTO_ANT), MONTO_ANT >= 0)
+    
+    # Aplicar el mismo filtro de departamento que montos_actual()
+    if (!is.null(input$dept_ranking) && input$dept_ranking != "TODOS")
+      resultado <- resultado %>% filter(DEPARTAMENTO == input$dept_ranking)
+    
+    resultado
   })
   
   metricas <- reactive({
@@ -372,18 +379,20 @@ server <- function(input, output, session) {
   output$kpi_variacion <- renderUI({
     t_act <- sum(montos_actual()$MONTO, na.rm = TRUE)
     df_a  <- montos_ant()
+    
     if (is.null(df_a) || nrow(df_a) == 0)
       return(kpi_card("Variación vs. año anterior", "—",
                       sub = "Sin datos previos", acento = "#9DA8B6"))
-    t_ant <- sum(df_a$MONTO_ANT, na.rm = TRUE)
+    
+    t_ant <- sum(df_a$MONTO_ANT, na.rm = TRUE)  # <- usa MONTO_ANT, no MONTO
     var   <- if (t_ant > 0) (t_act - t_ant) / t_ant * 100 else 0
     col   <- if (var >= 0) "#4A9E2B" else "#E55353"
+    
     kpi_card("Variación Anual",
              paste0(if (var >= 0) "+" else "", round(var, 1), "%"),
-             sub = paste("Año anterior:", fmt_millon(t_ant)),
+             sub    = paste("Año anterior:", fmt_millon(t_ant)),
              acento = col)
   })
-  
   output$kpi_top_dept <- renderUI({
     df <- montos_actual() %>% arrange(desc(MONTO)) %>% slice(2)
     validate(need(nrow(df) > 0, ""))
@@ -403,95 +412,95 @@ server <- function(input, output, session) {
   
   # ── Ranking ─────────────────────────────────────────────────
   
-    output$ranking <- renderPlotly({
-      m  <- metricas()
-      df <- m$df %>%
-        arrange(if (input$orden_ranking == "desc") MONTO
-                else desc(MONTO)) %>%
-        mutate(
-          COLOR = case_when(
-            MONTO < m$low   ~ "#E55353",
-            MONTO >= m$high ~ "#4A9E2B",
-            TRUE            ~ "#2980B9"),
-          NIVEL = case_when(
-            MONTO < m$low   ~ "Nivel bajo",
-            MONTO >= m$high ~ "Nivel alto",
-            TRUE            ~ "Nivel medio"),
-          DF = factor(DEPARTAMENTO, levels = DEPARTAMENTO))
-      
-      plot_ly() %>%
-    # Barras primero (quedan debajo)
-    add_bars(
-      data = df,
-      x = ~MONTO, y = ~DF,
-      orientation   = "h",
-      showlegend    = FALSE,
-      marker        = list(color = ~COLOR, line = list(width = 0)),
-      text          = ~fmt_millon_gg(MONTO),
-      textposition  = "outside",
-      cliponaxis    = FALSE,
-      textfont      = list(color = "#E8EDF2", size = 9),
-      hovertemplate = "<b>%{y}</b><br>%{text}<br>%{customdata}<extra></extra>",
-      customdata    = ~NIVEL) %>%
-    # Traces fantasma para leyenda
-    add_bars(
-      x = NA_real_, y = NA_character_,
-      name = "Nivel alto", showlegend = TRUE,
-      marker = list(color = "#4A9E2B"), inherit = FALSE) %>%
-    add_bars(
-      x = NA_real_, y = NA_character_,
-      name = "Nivel medio", showlegend = TRUE,
-      marker = list(color = "#2980B9"), inherit = FALSE) %>%
-    add_bars(
-      x = NA_real_, y = NA_character_,
-      name = "Nivel bajo", showlegend = TRUE,
-      marker = list(color = "#E55353"), inherit = FALSE) %>%
-    # Línea de promedio
-    add_segments(
-      x    = m$prom, xend = m$prom,
-      y    = -0.5,   yend = nrow(df) - 0.5,
-      line = list(
-        color = "#F4A942",
-        width = 2.5,          
-        dash  = "dot"   
-      ),
-      name       = "Promedio nacional",
-      showlegend = TRUE,
-      inherit    = FALSE) %>%
-    layout(
-      paper_bgcolor = "#1A1D24",
-      plot_bgcolor  = "#1A1D24",
-      margin = list(l = 8, r = 80, t = 8, b = 45),
-      xaxis = list(
-        title      = list(
-          text = "Gasto ejecutado (S/)",
-          font = list(color = "#9DA8B6", size = 10)),
-        color      = "#9DA8B6",
-        showgrid   = TRUE,
-        gridcolor  = "#2B303C",
-        zeroline   = FALSE,
-        tickformat = ",.0f",
-        tickfont   = list(color = "#9DA8B6", size = 9),
-        automargin = TRUE),
-      yaxis = list(
-        title         = list(
-          text     = "Departamento",
-          font     = list(color = "#9DA8B6", size = 10),
-          standoff = 8),
-        color         = "#FFF",
-        showgrid      = FALSE,
-        automargin    = TRUE,
-        tickfont      = list(color = "#E8EDF2", size = 9),
-        categoryorder = "array",
-        categoryarray = levels(df$DF)),
-      showlegend = TRUE,
-      bargap = 0.28,
-      legend = list(
-        x       = 0.55, y = 0.02,
-        font    = list(color = "#9DA8B6", size = 9),
-        bgcolor = "rgba(0,0,0,0)")) %>%
-    config(displayModeBar = FALSE)
-    })
+  output$ranking <- renderPlotly({
+    m  <- metricas()
+    df <- m$df %>%
+      arrange(if (input$orden_ranking == "desc") MONTO
+              else desc(MONTO)) %>%
+      mutate(
+        COLOR = case_when(
+          MONTO < m$low   ~ "#E55353",
+          MONTO >= m$high ~ "#4A9E2B",
+          TRUE            ~ "#2980B9"),
+        NIVEL = case_when(
+          MONTO < m$low   ~ "Nivel bajo",
+          MONTO >= m$high ~ "Nivel alto",
+          TRUE            ~ "Nivel medio"),
+        DF = factor(DEPARTAMENTO, levels = DEPARTAMENTO))
+    
+    plot_ly() %>%
+      # Barras primero (quedan debajo)
+      add_bars(
+        data = df,
+        x = ~MONTO, y = ~DF,
+        orientation   = "h",
+        showlegend    = FALSE,
+        marker        = list(color = ~COLOR, line = list(width = 0)),
+        text          = ~fmt_millon_gg(MONTO),
+        textposition  = "outside",
+        cliponaxis    = FALSE,
+        textfont      = list(color = "#E8EDF2", size = 9),
+        hovertemplate = "<b>%{y}</b><br>%{text}<br>%{customdata}<extra></extra>",
+        customdata    = ~NIVEL) %>%
+      # Traces fantasma para leyenda
+      add_bars(
+        x = NA_real_, y = NA_character_,
+        name = "Nivel alto", showlegend = TRUE,
+        marker = list(color = "#4A9E2B"), inherit = FALSE) %>%
+      add_bars(
+        x = NA_real_, y = NA_character_,
+        name = "Nivel medio", showlegend = TRUE,
+        marker = list(color = "#2980B9"), inherit = FALSE) %>%
+      add_bars(
+        x = NA_real_, y = NA_character_,
+        name = "Nivel bajo", showlegend = TRUE,
+        marker = list(color = "#E55353"), inherit = FALSE) %>%
+      # Línea de promedio
+      add_segments(
+        x    = m$prom, xend = m$prom,
+        y    = -0.5,   yend = nrow(df) - 0.5,
+        line = list(
+          color = "#F4A942",
+          width = 2.5,          
+          dash  = "dot"   
+        ),
+        name       = "Promedio nacional",
+        showlegend = TRUE,
+        inherit    = FALSE) %>%
+      layout(
+        paper_bgcolor = "#1A1D24",
+        plot_bgcolor  = "#1A1D24",
+        margin = list(l = 8, r = 80, t = 8, b = 45),
+        xaxis = list(
+          title      = list(
+            text = "Gasto ejecutado (S/)",
+            font = list(color = "#9DA8B6", size = 10)),
+          color      = "#9DA8B6",
+          showgrid   = TRUE,
+          gridcolor  = "#2B303C",
+          zeroline   = FALSE,
+          tickformat = ",.0f",
+          tickfont   = list(color = "#9DA8B6", size = 9),
+          automargin = TRUE),
+        yaxis = list(
+          title         = list(
+            text     = "Departamento",
+            font     = list(color = "#9DA8B6", size = 10),
+            standoff = 8),
+          color         = "#FFF",
+          showgrid      = FALSE,
+          automargin    = TRUE,
+          tickfont      = list(color = "#E8EDF2", size = 9),
+          categoryorder = "array",
+          categoryarray = levels(df$DF)),
+        showlegend = TRUE,
+        bargap = 0.28,
+        legend = list(
+          x       = 0.55, y = 0.02,
+          font    = list(color = "#9DA8B6", size = 9),
+          bgcolor = "rgba(0,0,0,0)")) %>%
+      config(displayModeBar = FALSE)
+  })
   
   # ── Tabla semáforo ───────────────────────────────────────────
   
